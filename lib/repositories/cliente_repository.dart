@@ -27,30 +27,26 @@ class ClienteRepository {
  Future<int> guardarOActualizarCliente(Cliente cliente, {Transaction? txn}) async {
     final executor = txn ?? await _db;
     
-    final List<Map<String, dynamic>> existentes = await executor.query(
-      'clientes',
-      where: 'LOWER(nombre) = LOWER(?) AND telefono = ?',
-      whereArgs: [cliente.nombre, cliente.telefono],
-    );
-
-    if (existentes.isNotEmpty) {
-      int id = existentes.first['id_cliente'];
-      
-      final datosAActualizar = cliente.toMap();
-      datosAActualizar.remove('id_cliente'); 
-
+    if (cliente.id != null) {
       await executor.update(
         'clientes',
-        datosAActualizar,
+        cliente.toMap()..remove('id_cliente'),
         where: 'id_cliente = ?',
-        whereArgs: [id],
+        whereArgs: [cliente.id],
       );
-      return id;
+      return cliente.id!;
     } else {
-      final datosAInsertar = cliente.toMap();
-      datosAInsertar.remove('id_cliente');
-      
-      return await executor.insert('clientes', datosAInsertar);
+      return await executor.insert('clientes', cliente.toMap()..remove('id_cliente'));
+    }
+  }
+
+  // Agregamos la función para eliminar
+  Future<void> eliminarCliente(int id) async {
+    final db = await _db;
+    try {
+      await db.delete('clientes', where: 'id_cliente = ?', whereArgs: [id]);
+    } catch (e) {
+      throw Exception('No se puede eliminar este cliente porque tiene ventas asociadas.');
     }
   }
 }

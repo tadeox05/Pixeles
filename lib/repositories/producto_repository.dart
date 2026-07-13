@@ -8,30 +8,29 @@ class ProductoRepository {
  Future<int> guardarOActualizarProducto(Producto producto, {Transaction? txn}) async {
     final executor = txn ?? await _db;
 
-    
-    final List<Map<String, dynamic>> resultado = await executor.query(
-      'productos',
-      where: 'LOWER(nombre) = LOWER(?)',
-      whereArgs: [producto.nombre],
-    );
-
-    if (resultado.isNotEmpty) {
-      int idExistente = resultado.first['id_producto'];
+    if (producto.id != null) {
+      // Si tiene ID, es una edición. Actualizamos ese registro específico.
       await executor.update(
         'productos',
-        {
-          'nombre': producto.nombre, 
-          'precio_actual': producto.precioActual
-        },
+        producto.toMap()..remove('id_producto'), // Evitamos actualizar el ID
         where: 'id_producto = ?',
-        whereArgs: [idExistente],
+        whereArgs: [producto.id],
       );
-      return idExistente; 
+      return producto.id!; 
     } else {
-      final datosAInsertar = producto.toMap();
-      datosAInsertar.remove('id_producto');
-      
-      return await executor.insert('productos', datosAInsertar);
+      // Si no tiene ID, es un producto nuevo. Insertamos.
+      return await executor.insert('productos', producto.toMap()..remove('id_producto'));
+    }
+  }
+
+  // Agregamos la función para eliminar
+  Future<void> eliminarProducto(int id) async {
+    final db = await _db;
+    try {
+      await db.delete('productos', where: 'id_producto = ?', whereArgs: [id]);
+    } catch (e) {
+      // Si la base de datos bloquea el borrado, lanzamos un mensaje amigable
+      throw Exception('No se puede eliminar este producto porque está incluido en ventas históricas.');
     }
   }
 

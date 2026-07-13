@@ -5,6 +5,7 @@ import '../models/detalle_venta.dart';
 import '../models/venta.dart';
 import '../repositories/venta_repository.dart';
 import '../repositories/producto_repository.dart';
+import '../repositories/cliente_repository.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
@@ -44,14 +45,19 @@ class _NuevaVentaScreenState extends State<NuevaVentaScreen> {
   final _pagoClienteCtrl = TextEditingController(text: '0');
   // Lista de renglones de productos
   final List<ControladorRenglon> _renglones = [ControladorRenglon()]; // Arranca con 1 vacío
+  final _observacionesCtrl = TextEditingController();
 
   // Lista para el autocompletado cargada desde SQLite
   List<Producto> _catalogoProductos = [];
+  // --- Variables para Autocompletado de Clientes ---
+  List<Cliente> _clientesDB = [];
+  Cliente? _clienteSeleccionado;
 
   @override
   void initState() {
     super.initState();
     _cargarCatalogo();
+    _cargarClientesLocales();
 
     if (widget.ventaExistente != null) {
       final v = widget.ventaExistente!;
@@ -61,6 +67,7 @@ class _NuevaVentaScreenState extends State<NuevaVentaScreen> {
       _canalSeleccionado = v.canalVenta;
       _pagoClienteCtrl.text = v.montoPagado.toString();
       _fechaManual = v.fecha;
+      _observacionesCtrl.text = v.observaciones ?? '';
       
       _renglones.clear();
       for (var det in v.detalles) {
@@ -91,6 +98,11 @@ class _NuevaVentaScreenState extends State<NuevaVentaScreen> {
     });
   }
 
+  Future<void> _cargarClientesLocales() async {
+    final clientes = await ClienteRepository().obtenerTodos();
+    if (mounted) setState(() => _clientesDB = clientes);
+  }
+
   // Calcula el total en tiempo real leyendo los controladores
   double _calcularTotalVisible() {
     double total = 0;
@@ -103,6 +115,7 @@ class _NuevaVentaScreenState extends State<NuevaVentaScreen> {
   }
 
 Future<void> _guardarVenta(bool exportarPdf) async {
+    if (_isGuardando) return;
     if (!_formKey.currentState!.validate()) return;
     if (_renglones.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Agregá al menos un producto')));
@@ -113,6 +126,7 @@ Future<void> _guardarVenta(bool exportarPdf) async {
 
     try {
       final cliente = Cliente(
+        id: _clienteSeleccionado?.id,
         nombre: _nombreClienteCtrl.text.trim(), 
         telefono: _telefonoCtrl.text.trim(), 
         domicilio: _domicilioCtrl.text.trim()
@@ -132,6 +146,7 @@ Future<void> _guardarVenta(bool exportarPdf) async {
         cliente: cliente,
         fecha: _fechaManual,
         canalVenta: _canalSeleccionado,
+        observaciones: _observacionesCtrl.text.trim(),
         detalles: detalles,
         montoPagado: pago,
         saldoPendiente: total - pago,
@@ -174,22 +189,34 @@ Future<void> _guardarVenta(bool exportarPdf) async {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Nueva Venta'),
-        backgroundColor: Colors.transparent,
+      appBar: AppBar(title: const Text('Nueva Venta'), backgroundColor: Colors.transparent),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800), // Evita que se estire en PC
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _construirTarjetaCliente(),
+                const SizedBox(height: 16),
+                _construirSeccionProductos(),
+              ],
+            ),
+          ),
+        ),
       ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+      bottomNavigationBar: SafeArea(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _construirTarjetaCliente(),
-            const SizedBox(height: 16),
-            _construirSeccionProductos(),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 800),
+              child: _construirBarraInferior(),
+            ),
           ],
         ),
       ),
-      bottomNavigationBar: _construirBarraInferior(),
     );
   }
 
@@ -204,10 +231,52 @@ Future<void> _guardarVenta(bool exportarPdf) async {
           children: [
             const Text('DATOS DEL CLIENTE', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            TextFormField(
-              controller: _nombreClienteCtrl,
-              decoration: const InputDecoration(labelText: 'Nombre *', border: OutlineInputBorder()),
-              validator: (val) => val == null || val.isEmpty ? 'Requerido' : null,
+            // --- AUTOCOMPLETADO DE CLIENTE ---
+            // --- AUTOCOMPLETADO DE CLIENTE ---
+            Autocomplete<Cliente>(
+              optionsBuilder: (TextEditingValue textEditingValue) {
+                if (textEditingValue.text.isEmpty) {
+                  return const Iterable<Cliente>.empty();
+                }
+                return _clientesDB.where((Cliente c) =>
+                    c.nombre.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+              },
+              displayStringForOption: (Cliente option) => option.nombre,
+              onSelected: (Cliente selection) {
+                // Cuando toca una sugerencia, rellenamos todo automáticamente
+                setState(() {
+                  _clienteSeleccionado = selection;
+                  _nombreClienteCtrl.text = selection.nombre; 
+                  _telefonoCtrl.text = selection.telefono ?? '';
+                  _domicilioCtrl.text = selection.domicilio ?? '';
+                });
+              },
+              fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+                // Sincronizamos el controlador interno del Autocomplete con tu controlador general
+                textEditingController.addListener(() {
+                  _nombreClienteCtrl.text = textEditingController.text;
+                  // Si el usuario borra o cambia una letra, desvinculamos al cliente seleccionado
+                  if (_clienteSeleccionado != null && textEditingController.text != _clienteSeleccionado!.nombre) {
+                    _clienteSeleccionado = null;
+                  }
+                });
+
+                // Si estamos editando una venta y ya hay un cliente, lo mostramos
+                if (_nombreClienteCtrl.text.isNotEmpty && textEditingController.text.isEmpty) {
+                  textEditingController.text = _nombreClienteCtrl.text;
+                }
+
+                return TextFormField(
+                  controller: textEditingController,
+                  focusNode: focusNode,
+                  decoration: const InputDecoration(
+                    labelText: 'Nombre del Cliente *',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                  validator: (value) => value == null || value.trim().isEmpty ? 'Ingresa un nombre' : null,
+                );
+              },
             ),
             const SizedBox(height: 16),
             Row(
@@ -233,6 +302,12 @@ Future<void> _guardarVenta(bool exportarPdf) async {
             TextFormField(
               controller: _domicilioCtrl,
               decoration: const InputDecoration(labelText: 'Dirección (Opcional)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+            controller: _observacionesCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(labelText: 'Observaciones para la boleta (Opcional)', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 16),
             ListTile(
